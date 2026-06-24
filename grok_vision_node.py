@@ -1,8 +1,9 @@
 """
-ComfyUI-GrokVision  v2.0
+ComfyUI-GrokVision  v3.0
 ────────────────────────
-Nodo para generar prompts fotorrealistas enviando una imagen a Grok Vision.
-Incluye prompts fórmula predefinidos + modo custom.
+Nodo para generar prompts fotorrealistas enviando:
+  - Modo IMAGEN  → analiza una imagen y genera el prompt
+  - Modo BOOSTER → recibe un prompt simple y lo potencia para Flux + LoRA Sasha
 """
 
 import base64
@@ -19,44 +20,44 @@ MODELS = [
     "grok-4.20-0309-non-reasoning",
 ]
 
-# ── Prompts fórmula predefinidos ───────────────────────────────────────
+# ── Modos del nodo ─────────────────────────────────────────────────────
+MODES = [
+    "🖼️ Image → Prompt",
+    "⚡ Prompt Booster",
+]
+
+# ── Fórmulas para modo IMAGEN ──────────────────────────────────────────
 FORMULA_PROMPTS = {
     "🎯 Custom (escribe el tuyo)": "",
-
     "📸 Pose Reference → Sasha": (
         "Analyze this image and extract ONLY the pose, body position, camera angle, "
         "shot type, and scene setting. Then build a complete photorealistic prompt "
         "replacing the subject with Sasha using her fixed traits from the system prompt. "
         "Keep the exact pose, angle and environment but swap the character entirely."
     ),
-
     "🌅 Scene + Outfit Description": (
         "Describe this image as a detailed photorealistic prompt. Focus on: "
         "shot type, camera angle and lens, lighting direction and quality, "
         "background/environment details, outfit (every garment with fabric, cut, color, fit), "
         "pose and expression. Output the prompt only, no preamble."
     ),
-
     "💡 Lighting & Mood Extraction": (
         "Extract only the lighting setup and mood from this image and describe it "
         "as a technical photography lighting prompt. Include: light source type, "
         "direction, quality (hard/soft), color temperature, shadows, atmosphere. "
         "Output as a comma-separated prompt segment to append to an existing prompt."
     ),
-
     "👗 Outfit Detail Extractor": (
         "Describe every garment and accessory visible in this image with maximum detail: "
         "fabric type, texture, color, cut, fit, how it interacts with the body. "
         "Output as a prompt segment only, starting directly with the clothing description."
     ),
-
     "🎬 Full Cinematic Prompt": (
         "Analyze this image and generate a complete cinematic photorealistic prompt. "
         "Structure: [shot type + lens + angle], [subject appearance], [pose + expression], "
         "[outfit details], [lighting], [background], [atmosphere + style]. "
         "No markdown, no preamble, output the prompt only."
     ),
-
     "🔄 img2img Variation": (
         "Describe this image as a detailed prompt that could recreate it with slight "
         "variations. Focus on composition, lighting, color palette, mood, and subject "
@@ -86,12 +87,48 @@ Physical traits: light greenish-gray eyes, black chin-length wavy bob haircut, v
 - ALWAYS include ALL fixed character traits — never skip them.
 - English only. No markdown in output. No preamble. Prompt only."""
 
+# ── System prompt para Booster ─────────────────────────────────────────
+BOOSTER_SYSTEM = """# Role: Flux2 LoRA Prompt Booster for Sasha
+
+## Your Job
+You receive a short, simple, or rough prompt. Your task is to expand and restructure it
+into a powerful, detailed photorealistic prompt that maximizes LoRA activation and
+visual quality for the Flux2 model with the Sasha LoRA.
+
+## Fixed Character Profile (MANDATORY — always inject ALL traits verbatim)
+LoRA trigger words (must appear at the start): sasha, sasha
+Physical traits: light greenish-gray eyes, black chin-length wavy bob haircut,
+vitiligo patches around mouth, extremely pale cool porcelain skin tone,
+flawless snow-white fair complexion with cool pinkish undertones,
+full heavy breasts, narrow waist, wide hips, thick thighs and a round firm ass.
+
+## Output Structure (strict order, no skipping)
+1. LoRA triggers + character anchor:
+   "sasha, sasha, [all fixed physical traits],"
+2. Scene & setting: where is she, what is the environment, time of day.
+3. Shot type & camera: focal length (e.g. 85mm portrait), angle, framing, depth of field.
+4. Pose & action: exact body position, hands, gaze, expression.
+5. Outfit: every garment — fabric, texture, color, cut, how it fits her body specifically.
+6. Skin detail line (always include verbatim):
+   "Highly realistic pale skin texture with visible subtle pores and soft natural highlights."
+7. Lighting: source type, direction, quality (hard/soft), color temperature, shadows.
+8. Atmosphere & style: mood, grain/film style, color palette, cinematic references if relevant.
+9. Quality anchors (always end with):
+   "ultra-detailed, sharp focus, photorealistic, 8k, raw photo."
+
+## Expansion Rules
+- Take whatever the user gives (even 3 words) and build a full cinematic scene.
+- Infer missing details intelligently — if they say "at the beach", choose a time of day,
+  lighting condition, outfit, and pose that make sense visually.
+- The Sasha character traits are NON-NEGOTIABLE and must always appear in full.
+- Never use markdown, headers, or bullet points in the output.
+- Output the prompt only — no preamble, no explanation, no quotes around it."""
+
 
 # ── Helper: tensor → base64 JPEG ──────────────────────────────────────
 def tensor_to_base64(image_tensor) -> str:
     img_np = (image_tensor[0].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
     pil_img = Image.fromarray(img_np, mode="RGB")
-    # Resize si es muy grande (max 1536px)
     max_dim = 1536
     w, h = pil_img.size
     if max(w, h) > max_dim:
@@ -104,8 +141,8 @@ def tensor_to_base64(image_tensor) -> str:
 
 # ── Nodo principal ─────────────────────────────────────────────────────
 class GrokVisionPrompt:
-    CATEGORY     = "GrokVision"
-    FUNCTION     = "generate"
+    CATEGORY = "GrokVision"
+    FUNCTION = "generate"
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt",)
 
@@ -113,92 +150,164 @@ class GrokVisionPrompt:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
-                "api_key": ("STRING", {
-                    "default": "xai-tu-key-aqui",
-                    "multiline": False,
-                }),
-                "model": (MODELS, {
-                    "default": MODELS[2],  # non-reasoning por defecto (más rápido)
-                }),
-                "formula": (FORMULA_KEYS, {
-                    "default": FORMULA_KEYS[1],  # Pose Reference → Sasha
-                }),
+                "api_key": (
+                    "STRING",
+                    {
+                        "default": "xai-tu-key-aqui",
+                        "multiline": False,
+                    },
+                ),
+                "mode": (
+                    MODES,
+                    {
+                        "default": MODES[0],
+                    },
+                ),
+                "model": (
+                    MODELS,
+                    {
+                        "default": MODELS[2],
+                    },
+                ),
             },
             "optional": {
-                "custom_instruction": ("STRING", {
-                    "default": "",
-                    "multiline": True,
-                    "placeholder": "Solo se usa si seleccionas '🎯 Custom' en formula",
-                }),
-                "system_prompt": ("STRING", {
-                    "default": DEFAULT_SYSTEM,
-                    "multiline": True,
-                }),
-                "max_tokens": ("INT", {
-                    "default": 1024,
-                    "min": 128,
-                    "max": 4096,
-                    "step": 128,
-                }),
+                # ── Modo IMAGEN ──────────────────────────────────────
+                "image": ("IMAGE",),
+                "formula": (
+                    FORMULA_KEYS,
+                    {
+                        "default": FORMULA_KEYS[1],
+                    },
+                ),
+                "custom_instruction": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "placeholder": "Solo se usa si formula = 🎯 Custom",
+                    },
+                ),
+                # ── Modo BOOSTER ─────────────────────────────────────
+                "input_prompt": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "placeholder": "Escribe aquí tu prompt simple (ej: sasha en la playa al atardecer)",
+                    },
+                ),
+                "booster_extra": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "placeholder": "Instrucciones extra para el booster (opcional): ej: enfocarse en el outfit, agregar lluvia, etc.",
+                    },
+                ),
+                # ── Compartidos ───────────────────────────────────────
+                "system_prompt": (
+                    "STRING",
+                    {
+                        "default": DEFAULT_SYSTEM,
+                        "multiline": True,
+                    },
+                ),
+                "max_tokens": (
+                    "INT",
+                    {
+                        "default": 1024,
+                        "min": 128,
+                        "max": 4096,
+                        "step": 128,
+                    },
+                ),
             },
         }
 
     def generate(
         self,
-        image,
         api_key: str,
+        mode: str,
         model: str,
-        formula: str,
+        image=None,
+        formula: str = FORMULA_KEYS[1],
         custom_instruction: str = "",
+        input_prompt: str = "",
+        booster_extra: str = "",
         system_prompt: str = DEFAULT_SYSTEM,
         max_tokens: int = 1024,
     ):
-        # ── elegir instrucción ────────────────────────────────────────
-        if formula == FORMULA_KEYS[0]:  # Custom
-            instruction = custom_instruction.strip()
-            if not instruction:
-                instruction = "Describe this image as a detailed photorealistic prompt."
-        else:
-            instruction = FORMULA_PROMPTS[formula]
-
-        # ── codificar imagen ──────────────────────────────────────────
-        b64 = tensor_to_base64(image)
-
-        # ── payload ───────────────────────────────────────────────────
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key.strip()}",
         }
 
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_prompt.strip(),
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{b64}",
-                                "detail": "high",
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": instruction,
-                        },
-                    ],
-                },
-            ],
-        }
+        # ══════════════════════════════════════════════════════════════
+        # MODO BOOSTER — prompt simple → prompt potenciado
+        # ══════════════════════════════════════════════════════════════
+        if mode == MODES[1]:
+            if not input_prompt.strip():
+                return (
+                    "[GrokVision ERROR] Modo Booster: el campo 'input_prompt' está vacío.",
+                )
 
-        # ── llamada API ───────────────────────────────────────────────
+            user_text = f"Input prompt: {input_prompt.strip()}"
+            if booster_extra.strip():
+                user_text += f"\n\nAdditional instructions: {booster_extra.strip()}"
+            user_text += (
+                "\n\nExpand this into a full, powerful Flux2 prompt following your system rules. "
+                "Output the prompt only."
+            )
+
+            payload = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": [
+                    {"role": "system", "content": BOOSTER_SYSTEM},
+                    {"role": "user", "content": user_text},
+                ],
+            }
+
+        # ══════════════════════════════════════════════════════════════
+        # MODO IMAGEN — imagen → prompt
+        # ══════════════════════════════════════════════════════════════
+        else:
+            if image is None:
+                return (
+                    "[GrokVision ERROR] Modo Image→Prompt: no hay imagen conectada.",
+                )
+
+            if formula == FORMULA_KEYS[0]:
+                instruction = custom_instruction.strip() or (
+                    "Describe this image as a detailed photorealistic prompt."
+                )
+            else:
+                instruction = FORMULA_PROMPTS[formula]
+
+            b64 = tensor_to_base64(image)
+
+            payload = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": [
+                    {"role": "system", "content": system_prompt.strip()},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{b64}",
+                                    "detail": "high",
+                                },
+                            },
+                            {"type": "text", "text": instruction},
+                        ],
+                    },
+                ],
+            }
+
+        # ── Llamada API ────────────────────────────────────────────────
         try:
             resp = requests.post(
                 "https://api.x.ai/v1/chat/completions",
@@ -207,9 +316,8 @@ class GrokVisionPrompt:
                 timeout=120,
             )
             resp.raise_for_status()
-            data   = resp.json()
+            data = resp.json()
             result = data["choices"][0]["message"]["content"].strip()
-            # Limpiar posibles backticks si el modelo los incluye
             result = result.strip("`").strip()
 
         except requests.exceptions.HTTPError as e:
@@ -226,8 +334,8 @@ class GrokVisionPrompt:
         except Exception as e:
             result = f"[GrokVision ERROR] {type(e).__name__}: {str(e)}"
 
-        print(f"\n[GrokVision] modelo={model} | fórmula={formula}")
-        print(f"[GrokVision] OUTPUT:\n{result[:200]}...\n")
+        print(f"\n[GrokVision] modo={mode} | modelo={model}")
+        print(f"[GrokVision] OUTPUT:\n{result[:300]}...\n")
 
         return (result,)
 
