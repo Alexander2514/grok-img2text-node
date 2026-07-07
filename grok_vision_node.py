@@ -1,5 +1,5 @@
 """
-ComfyUI-GrokVision  v3.0
+ComfyUI-GrokVision  v3.1
 ────────────────────────
 Nodo para generar prompts fotorrealistas enviando:
   - Modo IMAGEN  → analiza una imagen y genera el prompt
@@ -8,57 +8,57 @@ Nodo para generar prompts fotorrealistas enviando:
 
 import base64
 import io
-import json
 import requests
 import numpy as np
 from PIL import Image
 
 # ── Modelos disponibles ────────────────────────────────────────────────
 MODELS = [
-    "grok-4.20-multi-agent-0309",
-    "grok-4.20-0309-reasoning",
-    "grok-4.20-0309-non-reasoning",
+    "grok-2-vision-latest",
+    "grok-2-vision-1212",
+    "grok-3-mini-beta",
+    "grok-3-beta",
 ]
 
 # ── Modos del nodo ─────────────────────────────────────────────────────
 MODES = [
-    "🖼️ Image → Prompt",
-    "⚡ Prompt Booster",
+    "Image → Prompt",
+    "Prompt Booster",
 ]
 
 # ── Fórmulas para modo IMAGEN ──────────────────────────────────────────
 FORMULA_PROMPTS = {
-    "🎯 Custom (escribe el tuyo)": "",
-    "📸 Pose Reference → Sasha": (
+    "Custom (escribe el tuyo)": "",
+    "Pose Reference -> Sasha": (
         "Analyze this image and extract ONLY the pose, body position, camera angle, "
         "shot type, and scene setting. Then build a complete photorealistic prompt "
         "replacing the subject with Sasha using her fixed traits from the system prompt. "
         "Keep the exact pose, angle and environment but swap the character entirely."
     ),
-    "🌅 Scene + Outfit Description": (
+    "Scene + Outfit Description": (
         "Describe this image as a detailed photorealistic prompt. Focus on: "
         "shot type, camera angle and lens, lighting direction and quality, "
         "background/environment details, outfit (every garment with fabric, cut, color, fit), "
         "pose and expression. Output the prompt only, no preamble."
     ),
-    "💡 Lighting & Mood Extraction": (
+    "Lighting & Mood Extraction": (
         "Extract only the lighting setup and mood from this image and describe it "
         "as a technical photography lighting prompt. Include: light source type, "
         "direction, quality (hard/soft), color temperature, shadows, atmosphere. "
         "Output as a comma-separated prompt segment to append to an existing prompt."
     ),
-    "👗 Outfit Detail Extractor": (
+    "Outfit Detail Extractor": (
         "Describe every garment and accessory visible in this image with maximum detail: "
         "fabric type, texture, color, cut, fit, how it interacts with the body. "
         "Output as a prompt segment only, starting directly with the clothing description."
     ),
-    "🎬 Full Cinematic Prompt": (
+    "Full Cinematic Prompt": (
         "Analyze this image and generate a complete cinematic photorealistic prompt. "
         "Structure: [shot type + lens + angle], [subject appearance], [pose + expression], "
         "[outfit details], [lighting], [background], [atmosphere + style]. "
         "No markdown, no preamble, output the prompt only."
     ),
-    "🔄 img2img Variation": (
+    "img2img Variation": (
         "Describe this image as a detailed prompt that could recreate it with slight "
         "variations. Focus on composition, lighting, color palette, mood, and subject "
         "details. Make it suitable for img2img generation. Output the prompt only."
@@ -166,50 +166,13 @@ class GrokVisionPrompt:
                 "model": (
                     MODELS,
                     {
-                        "default": MODELS[2],
+                        "default": MODELS[0],
                     },
                 ),
-            },
-            "optional": {
-                # ── Modo IMAGEN ──────────────────────────────────────
-                "image": ("IMAGE",),
                 "formula": (
                     FORMULA_KEYS,
                     {
                         "default": FORMULA_KEYS[1],
-                    },
-                ),
-                "custom_instruction": (
-                    "STRING",
-                    {
-                        "default": "",
-                        "multiline": True,
-                        "placeholder": "Solo se usa si formula = 🎯 Custom",
-                    },
-                ),
-                # ── Modo BOOSTER ─────────────────────────────────────
-                "input_prompt": (
-                    "STRING",
-                    {
-                        "default": "",
-                        "multiline": True,
-                        "placeholder": "Escribe aquí tu prompt simple (ej: sasha en la playa al atardecer)",
-                    },
-                ),
-                "booster_extra": (
-                    "STRING",
-                    {
-                        "default": "",
-                        "multiline": True,
-                        "placeholder": "Instrucciones extra para el booster (opcional): ej: enfocarse en el outfit, agregar lluvia, etc.",
-                    },
-                ),
-                # ── Compartidos ───────────────────────────────────────
-                "system_prompt": (
-                    "STRING",
-                    {
-                        "default": DEFAULT_SYSTEM,
-                        "multiline": True,
                     },
                 ),
                 "max_tokens": (
@@ -222,6 +185,43 @@ class GrokVisionPrompt:
                     },
                 ),
             },
+            "optional": {
+                # ── Modo IMAGEN ──────────────────────────────────────
+                "image": ("IMAGE",),
+                # ── Modo BOOSTER ─────────────────────────────────────
+                "input_prompt": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "placeholder": "Prompt simple para el booster (ej: sasha en la playa al atardecer)",
+                    },
+                ),
+                "booster_extra": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "placeholder": "Instrucciones extra opcionales (ej: enfocarse en el outfit)",
+                    },
+                ),
+                # ── Compartidos ───────────────────────────────────────
+                "custom_instruction": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "placeholder": "Solo se usa si formula = Custom",
+                    },
+                ),
+                "system_prompt": (
+                    "STRING",
+                    {
+                        "default": DEFAULT_SYSTEM,
+                        "multiline": True,
+                    },
+                ),
+            },
         }
 
     def generate(
@@ -229,13 +229,13 @@ class GrokVisionPrompt:
         api_key: str,
         mode: str,
         model: str,
+        formula: str,
+        max_tokens: int,
         image=None,
-        formula: str = FORMULA_KEYS[1],
-        custom_instruction: str = "",
         input_prompt: str = "",
         booster_extra: str = "",
+        custom_instruction: str = "",
         system_prompt: str = DEFAULT_SYSTEM,
-        max_tokens: int = 1024,
     ):
         headers = {
             "Content-Type": "application/json",
@@ -245,11 +245,17 @@ class GrokVisionPrompt:
         # ══════════════════════════════════════════════════════════════
         # MODO BOOSTER — prompt simple → prompt potenciado
         # ══════════════════════════════════════════════════════════════
-        if mode == MODES[1]:
+        if mode == MODES[1]:  # "Prompt Booster"
             if not input_prompt.strip():
                 return (
-                    "[GrokVision ERROR] Modo Booster: el campo 'input_prompt' está vacío.",
+                    "[GrokVision ERROR] Modo Booster: conecta un Text Multiline al input 'input_prompt'.",
                 )
+
+            # Booster no necesita imagen ni visión — usa modelo de texto puro
+            booster_model = model
+            if "vision" in model.lower():
+                # Preferir modelo de texto si el seleccionado es vision-only
+                booster_model = "grok-3-mini-beta"
 
             user_text = f"Input prompt: {input_prompt.strip()}"
             if booster_extra.strip():
@@ -260,7 +266,7 @@ class GrokVisionPrompt:
             )
 
             payload = {
-                "model": model,
+                "model": booster_model,
                 "max_tokens": max_tokens,
                 "messages": [
                     {"role": "system", "content": BOOSTER_SYSTEM},
@@ -271,13 +277,18 @@ class GrokVisionPrompt:
         # ══════════════════════════════════════════════════════════════
         # MODO IMAGEN — imagen → prompt
         # ══════════════════════════════════════════════════════════════
-        else:
+        else:  # "Image → Prompt"
             if image is None:
                 return (
-                    "[GrokVision ERROR] Modo Image→Prompt: no hay imagen conectada.",
+                    "[GrokVision ERROR] Modo Image: conecta un LoadImage al input 'image'.",
                 )
 
-            if formula == FORMULA_KEYS[0]:
+            # Modo imagen necesita modelo con visión
+            vision_model = model
+            if "vision" not in model.lower():
+                vision_model = "grok-2-vision-latest"
+
+            if formula == FORMULA_KEYS[0]:  # Custom
                 instruction = custom_instruction.strip() or (
                     "Describe this image as a detailed photorealistic prompt."
                 )
@@ -287,7 +298,7 @@ class GrokVisionPrompt:
             b64 = tensor_to_base64(image)
 
             payload = {
-                "model": model,
+                "model": vision_model,
                 "max_tokens": max_tokens,
                 "messages": [
                     {"role": "system", "content": system_prompt.strip()},
@@ -320,7 +331,7 @@ class GrokVisionPrompt:
             result = data["choices"][0]["message"]["content"].strip()
             result = result.strip("`").strip()
 
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.HTTPError:
             body = ""
             try:
                 body = resp.json().get("error", {}).get("message", resp.text[:300])
@@ -346,5 +357,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "GrokVisionPrompt": "🔭 Grok Vision → Prompt",
+    "GrokVisionPrompt": "Grok Vision -> Prompt",
 }
