@@ -1,5 +1,5 @@
 """
-ComfyUI-GrokVision  v4.1
+ComfyUI-GrokVision  v4.2
 ────────────────────────
 Modo IMAGEN  → imagen + formula → prompt fotorrealista para Flux/Sasha
 Modo BOOSTER → prompt simple   → prompt potenciado para Flux/Sasha
@@ -8,9 +8,11 @@ Modo BOOSTER → prompt simple   → prompt potenciado para Flux/Sasha
 from .utils import tensor_to_base64, call_xai
 
 # ── Modelos (fuente: docs.x.ai — julio 2026) ─────────────────────────────────
+# Modelos con soporte de IMAGEN (vision) — julio 2026
+# grok-2-vision-* retirados el 15/05/2026, ahora grok-4.5 soporta imagen
 VISION_MODELS = [
-    "grok-2-vision-latest",
-    "grok-2-vision-1212",
+    "grok-4.5",
+    "grok-4.5-latest",
 ]
 TEXT_MODELS = [
     "grok-4.3",
@@ -24,7 +26,23 @@ TEXT_MODELS = [
     "grok-3-mini-fast",
     "grok-build-0.1",
 ]
-ALL_MODELS = VISION_MODELS + TEXT_MODELS
+# Desplegable completo — el nodo elige automaticamente segun el modo
+# Si el modo necesita vision y elegiste un modelo de texto -> usa grok-4.5
+# Si el modo es solo texto -> usa el modelo que elegiste
+ALL_MODELS = [
+    "grok-4.5",              # vision + texto | RECOMENDADO para modo imagen
+    "grok-4.5-latest",       # alias a la version mas reciente de 4.5
+    "grok-4.3",              # texto/razonamiento profundo
+    "grok-4",                # Grok 4 base
+    "grok-4-fast",           # Grok 4 rapido, 2M ctx
+    "grok-4-1-fast-reasoning",      # razonamiento rapido
+    "grok-4-1-fast-non-reasoning",  # maxima velocidad sin razonamiento
+    "grok-3",                # solido, menor costo
+    "grok-3-fast",
+    "grok-3-mini",           # economico, bueno para pruebas
+    "grok-3-mini-fast",
+    "grok-build-0.1",        # especializado en codigo
+]
 
 MODES = [
     "Image -> Prompt",
@@ -138,7 +156,7 @@ class GrokVisionPrompt:
                     {"default": "xai-tu-key-aqui", "multiline": False},
                 ),
                 "mode": (MODES, {"default": MODES[0]}),
-                "model": (ALL_MODELS, {"default": ALL_MODELS[0]}),
+                "model": (ALL_MODELS, {"default": "grok-4.5"}),
                 "formula": (FORMULA_KEYS, {"default": FORMULA_KEYS[1]}),
                 "max_tokens": (
                     "INT",
@@ -202,7 +220,7 @@ class GrokVisionPrompt:
                 return (
                     "[GrokVision] Booster: conecta un Text Multiline al input 'input_prompt'.",
                 )
-            active_model = model if model not in VISION_MODELS else "grok-4.3"
+            active_model = model if model not in VISION_MODELS else "grok-4.3"  # vision no sirve para texto puro
             user_text = f"Input prompt: {input_prompt.strip()}"
             if booster_extra.strip():
                 user_text += f"\n\nAdditional instructions: {booster_extra.strip()}"
@@ -221,7 +239,8 @@ class GrokVisionPrompt:
                 return (
                     "[GrokVision] Image mode: conecta un LoadImage al input 'image'.",
                 )
-            active_model = model if model in VISION_MODELS else "grok-2-vision-latest"
+            # Si el modelo elegido no soporta vision, usa grok-4.5 automaticamente
+            active_model = model if model in VISION_MODELS else "grok-4.5"
             instruction = (
                 custom_instruction.strip()
                 if formula == FORMULA_KEYS[0]

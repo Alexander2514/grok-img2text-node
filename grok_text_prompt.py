@@ -1,5 +1,5 @@
 """
-ComfyUI-GrokKrea2Prompt  v1.1
+ComfyUI-GrokKrea2Prompt  v1.2
 ──────────────────────────────
 Nodo para generar prompts optimizados para Krea2.
 Recibe texto o imagen, razona con Grok y devuelve un prompt
@@ -9,9 +9,11 @@ ultra-preciso listo para pegar en Krea2.
 from .utils import tensor_to_base64, call_xai
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
+# Modelos con soporte de IMAGEN (vision) — julio 2026
+# grok-2-vision-* retirados el 15/05/2026, ahora grok-4.5 soporta imagen
 VISION_MODELS = [
-    "grok-2-vision-latest",
-    "grok-2-vision-1212",
+    "grok-4.5",
+    "grok-4.5-latest",
 ]
 TEXT_MODELS = [
     "grok-4.3",
@@ -24,7 +26,23 @@ TEXT_MODELS = [
     "grok-3-mini",
     "grok-3-mini-fast",
 ]
-ALL_MODELS = VISION_MODELS + TEXT_MODELS
+# Desplegable completo — el nodo elige automaticamente segun el modo
+# Si el modo necesita vision y elegiste un modelo de texto -> usa grok-4.5
+# Si el modo es solo texto -> usa el modelo que elegiste
+ALL_MODELS = [
+    "grok-4.5",              # vision + texto | RECOMENDADO para modo imagen
+    "grok-4.5-latest",       # alias a la version mas reciente de 4.5
+    "grok-4.3",              # texto/razonamiento profundo
+    "grok-4",                # Grok 4 base
+    "grok-4-fast",           # Grok 4 rapido, 2M ctx
+    "grok-4-1-fast-reasoning",      # razonamiento rapido
+    "grok-4-1-fast-non-reasoning",  # maxima velocidad sin razonamiento
+    "grok-3",                # solido, menor costo
+    "grok-3-fast",
+    "grok-3-mini",           # economico, bueno para pruebas
+    "grok-3-mini-fast",
+    "grok-build-0.1",        # especializado en codigo
+]
 
 INPUT_MODES = [
     "Text -> Krea2 Prompt",
@@ -93,7 +111,7 @@ class GrokKrea2Prompt:
                     {"default": "xai-tu-key-aqui", "multiline": False},
                 ),
                 "input_mode": (INPUT_MODES, {"default": INPUT_MODES[0]}),
-                "model": (ALL_MODELS, {"default": "grok-4.3"}),
+                "model": (ALL_MODELS, {"default": "grok-4.5"}),
                 "krea2_style": (KREA2_STYLES, {"default": KREA2_STYLES[0]}),
                 "max_tokens": (
                     "INT",
@@ -153,7 +171,7 @@ class GrokKrea2Prompt:
         if input_mode == INPUT_MODES[0]:  # Text -> Krea2
             if not input_text.strip():
                 return ("[GrokKrea2] Conecta un Text Multiline al input 'input_text'.",)
-            active_model = model if model not in VISION_MODELS else "grok-4.3"
+            active_model = model if model not in VISION_MODELS else "grok-4.3"  # vision no sirve para texto puro
             user_content = f"Input idea: {input_text.strip()}\n\nCreate an optimized Krea2 prompt.{style_suffix}"
             if extra_instructions.strip():
                 user_content += f"\n\nExtra: {extra_instructions.strip()}"
@@ -169,7 +187,8 @@ class GrokKrea2Prompt:
         else:  # Image -> Krea2
             if image is None:
                 return ("[GrokKrea2] Conecta un LoadImage al input 'image'.",)
-            active_model = model if model in VISION_MODELS else "grok-2-vision-latest"
+            # Si el modelo elegido no soporta vision, usa grok-4.5 automaticamente
+            active_model = model if model in VISION_MODELS else "grok-4.5"
             user_content_text = (
                 "Analyze this image carefully. Generate an optimized Krea2 prompt "
                 "that could recreate or reimagine this scene with maximum fidelity."
